@@ -3,6 +3,7 @@
 !.env.example
 .streamlit/secrets.toml
 data/*.sqlite3
+data/*.db
 __pycache__/
 *.py[cod]
 .venv/
