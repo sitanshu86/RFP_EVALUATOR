@@ -48,7 +48,7 @@ Calculations use decimal arithmetic and unrounded values for ranking. The LLM do
 
 ## Configuration and security
 
-The API key is read from `OPENAI_API_KEY` in the server environment, local `.env`, or Streamlit Community Cloud secrets. Never commit `.env` or a populated `secrets.toml`. For Streamlit Community Cloud, configure the key in the app's server-side Secrets settings.
+The **Model setup** screen lets each app user choose OpenAI or an OpenAI-compatible provider, enter a model and endpoint, and provide a password-masked API key. A key entered in the screen remains in that active Streamlit session only; it is not written to `.env`, SQLite, logs, or run exports. OpenAI can alternatively read `OPENAI_API_KEY` from the server environment, local `.env`, or Streamlit Community Cloud secrets. Compatible providers can use a session key or the optional `RFP_COMPATIBLE_API_KEY` server variable. Never commit `.env` or a populated `secrets.toml`.
 
 SQLite on a hosted ephemeral filesystem may not survive runtime replacement. Download run JSON when persistence beyond the current deployment instance is required.
 

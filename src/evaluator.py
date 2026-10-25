@@ -22,10 +22,17 @@ class EvaluationError(RuntimeError):
 class OpenAIJsonLLM:
     """OpenAI-compatible adapter; credentials are read only from server environment."""
 
-    def __init__(self, model: str, api_key: str | None = None, max_attempts: int = 2):
+    def __init__(
+        self,
+        model: str,
+        api_key: str | None = None,
+        max_attempts: int = 2,
+        base_url: str | None = None,
+    ):
         self.model = model
         self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         self.max_attempts = max(1, max_attempts)
+        self.base_url = base_url.strip() if base_url else None
 
     def complete_json(self, prompt: str) -> str:
         if not self.api_key:
@@ -34,7 +41,7 @@ class OpenAIJsonLLM:
             from openai import OpenAI
         except ImportError as error:
             raise EvaluationError("Install the OpenAI dependency to use this LLM adapter.") from error
-        client = OpenAI(api_key=self.api_key)
+        client = OpenAI(api_key=self.api_key, base_url=self.base_url)
         for attempt in range(self.max_attempts):
             try:
                 response = client.chat.completions.create(

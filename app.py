@@ -31,7 +31,7 @@ st.set_page_config(
     page_title="RFP Evaluator | Procurement Workspace",
     page_icon="▦",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 st.markdown(
@@ -53,7 +53,7 @@ st.markdown(
     [data-testid="stHeader"] { background: transparent; }
     [data-testid="stMainBlockContainer"] { padding-top: 1.35rem; max-width: 1440px; }
     h1, h2, h3 { color: var(--ink); letter-spacing: 0; }
-    h1 { font-family: Georgia, "Times New Roman", serif; font-size: 2.15rem; font-weight: 500; }
+    h1 { font-family: Georgia, "Times New Roman", serif; font-size: 2.3rem; font-weight: 600; }
     h2 { font-family: Georgia, "Times New Roman", serif; font-size: 1.45rem; font-weight: 500; }
     h3 { font-size: 1.05rem; font-weight: 650; }
     [data-testid="stMetric"] {
@@ -62,10 +62,30 @@ st.markdown(
     }
     [data-testid="stMetricLabel"] { color: var(--muted); }
     [data-testid="stMetricValue"] { color: var(--forest); }
-    [data-testid="stTabs"] [role="tablist"] { border-bottom: 1px solid var(--line); gap: 0.35rem; }
-    [data-testid="stTabs"] button[role="tab"] { color: var(--muted); }
+    [data-testid="stTabs"] [role="tablist"] {
+        border-bottom: 1px solid var(--line);
+        gap: 0.4rem;
+        padding: 0 0.25rem;
+    }
+    [data-testid="stTabs"] button[role="tab"] {
+        color: var(--muted);
+        border-radius: 6px 6px 0 0;
+        border-bottom: 3px solid transparent;
+        padding: 0.7rem 0.95rem 0.6rem;
+        font-weight: 600;
+        transition: background-color 120ms ease, color 120ms ease;
+    }
+    [data-testid="stTabs"] button[role="tab"]:hover {
+        color: var(--forest);
+        background: var(--forest-soft);
+    }
+    [data-testid="stTabs"] button[role="tab"]:focus-visible {
+        outline: 2px solid var(--forest);
+        outline-offset: 2px;
+    }
     [data-testid="stTabs"] button[aria-selected="true"] {
         color: var(--forest); border-bottom-color: var(--forest); font-weight: 650;
+        background: var(--forest-soft);
     }
     [data-testid="stFileUploader"] section { background: var(--paper); border-color: var(--line); }
     [data-testid="stForm"] { border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
@@ -84,8 +104,13 @@ st.markdown(
 )
 
 
-def get_llm_api_key() -> str | None:
-    """Read a provider key without rendering or logging its value."""
+def get_llm_api_key(provider_name: str = "OpenAI") -> str | None:
+    """Resolve a session key first, then use server-side secrets/environment."""
+    session_key = st.session_state.get("provider_api_key")
+    if session_key and st.session_state.get("provider_api_key_provider") == provider_name:
+        return str(session_key)
+    if provider_name != "OpenAI":
+        return os.getenv("RFP_COMPATIBLE_API_KEY")
     try:
         secret_value = st.secrets.get("OPENAI_API_KEY")
     except Exception:
@@ -99,21 +124,11 @@ def get_llm_model(default_model: str) -> str:
     except Exception:
         return default_model
 
-def build_services(settings: Settings, api_key: str | None) -> tuple[EvaluationRepository, RunOrchestrator]:
-    repository = EvaluationRepository(settings.database_path)
-    llm = OpenAIJsonLLM(
-        model=settings.llm_model,
-        api_key=api_key,
-        max_attempts=settings.llm_max_attempts,
-    )
-    orchestrator = RunOrchestrator(
-        repository=repository,
-        document_tool=DocumentTool(settings.max_pdf_bytes, settings.max_document_characters),
-        evaluation_agent=EvaluationAgent(llm),
-        validation_tool=ValidationTool(),
-        settings=settings,
-    )
-    return repository, orchestrator
+
+def clear_provider_api_key() -> None:
+    st.session_state.pop("provider_api_key", None)
+    st.session_state.pop("provider_api_key_provider", None)
+    st.session_state["provider_api_key_input"] = ""
 
 
 def load_active_criteria_for_display(database_path: Path):
@@ -127,6 +142,93 @@ def load_active_criteria_for_display(database_path: Path):
         ).fetchall()
     finally:
         connection.close()
+
+
+def build_services(settings: Settings, api_key: str | None) -> tuple[EvaluationRepository, RunOrchestrator]:
+    repository = EvaluationRepository(settings.database_path)
+    llm = OpenAIJsonLLM(
+        model=settings.llm_model,
+        api_key=api_key,
+        max_attempts=settings.llm_max_attempts,
+        base_url=settings.llm_base_url or None,
+    )
+    orchestrator = RunOrchestrator(
+        repository=repository,
+        document_tool=DocumentTool(settings.max_pdf_bytes, settings.max_document_characters),
+        evaluation_agent=EvaluationAgent(llm),
+        validation_tool=ValidationTool(),
+        settings=settings,
+    )
+    return repository, orchestrator
+
+
+def render_model_setup(settings: Settings) -> None:
+    st.markdown("### Engine settings")
+    st.caption("Choose the model used for evaluations.")
+
+    provider_names = ["OpenAI", "OpenAI-compatible provider"]
+    saved_provider = st.session_state.get("provider_name", settings.llm_provider)
+    provider_index = provider_names.index(saved_provider) if saved_provider in provider_names else 0
+    provider_name = st.selectbox(
+        "Provider",
+        provider_names,
+        index=provider_index,
+        key="provider_name_selector",
+    )
+    st.session_state.provider_name = provider_name
+    saved_model = st.session_state.get("provider_model", settings.llm_model)
+    saved_base_url = st.session_state.get("provider_base_url", settings.llm_base_url)
+
+    with st.form("model_provider_form", enter_to_submit=False):
+        model_name = st.text_input("Model name", value=saved_model, placeholder="e.g. gpt-4o-mini")
+        base_url = ""
+        if provider_name == "OpenAI-compatible provider":
+            base_url = st.text_input(
+                "API base URL",
+                value=saved_base_url,
+                placeholder="https://api.example.com/v1",
+                help="Use an OpenAI Chat Completions-compatible endpoint with JSON output support.",
+            )
+        st.caption("API key")
+        entered_key = st.text_input(
+            "Provider API key",
+            type="password",
+            key="provider_api_key_input",
+            placeholder="Paste API key",
+            help="Held in memory for this browser session only.",
+            label_visibility="collapsed",
+        )
+        save_settings = st.form_submit_button("Save settings", type="primary", width="stretch")
+
+    if save_settings:
+        if not model_name.strip():
+            st.error("Enter a model name.")
+        elif provider_name == "OpenAI-compatible provider" and not base_url.strip().startswith(("https://", "http://")):
+            st.error("Enter an absolute HTTP or HTTPS API base URL.")
+        elif entered_key.strip() and "\n" in entered_key:
+            st.error("The API key must be entered on one line.")
+        else:
+            st.session_state.provider_model = model_name.strip()
+            st.session_state.provider_base_url = base_url.strip()
+            if entered_key.strip():
+                st.session_state.provider_api_key = entered_key.strip()
+                st.session_state.provider_api_key_provider = provider_name
+            st.success("Settings saved for this session.")
+
+    source_configured = bool(get_llm_api_key(provider_name))
+    if source_configured:
+        if st.session_state.get("provider_api_key_provider") == provider_name and st.session_state.get("provider_api_key"):
+            key_source = "session key"
+        elif provider_name == "OpenAI":
+            key_source = "server environment/secrets"
+        else:
+            key_source = "RFP_COMPATIBLE_API_KEY environment variable"
+        st.success(f"Key ready · {key_source}")
+    else:
+        st.warning("API key required for evaluation.")
+
+    st.button("Clear session API key", key="clear_provider_key", on_click=clear_provider_api_key)
+    st.caption("Session key is not saved to files, SQLite, run exports, or logs.")
 
 
 def render_criteria(criteria_rows) -> None:
@@ -349,10 +451,10 @@ def main() -> None:
     settings = Settings.from_environment()
     settings = replace(settings, llm_model=get_llm_model(settings.llm_model))
     initialize_database(settings.database_path)
-    repository, orchestrator = build_services(settings, get_llm_api_key())
+    repository = EvaluationRepository(settings.database_path)
 
     st.markdown("<div class='eyebrow'>Procurement intelligence · Evaluation workspace</div>", unsafe_allow_html=True)
-    st.title("Supplier proposal evaluation")
+    st.title("Supplier Proposal Evaluation")
     st.markdown(
         "<div class='subtle'>Compare evidence-backed proposal assessments against a shared criteria set.</div>",
         unsafe_allow_html=True,
@@ -389,9 +491,25 @@ def main() -> None:
     else:
         st.progress(0.0, text="Ready · upload proposals to begin a batch")
 
+    with st.sidebar:
+        render_model_setup(settings)
+
     criteria_tab, input_tab, leaderboard_tab, scorecard_tab, details_tab = st.tabs(
-        ["Criteria", "Supplier input", "Leaderboard", "Detailed scorecard", "Run details"]
+        ["◈  Criteria", "↑  Supplier input", "▤  Leaderboard", "▣  Scorecards", "↺  Run details"]
     )
+
+    provider_name = st.session_state.get("provider_name", settings.llm_provider)
+    provider_model = st.session_state.get("provider_model", settings.llm_model)
+    provider_base_url = st.session_state.get("provider_base_url", settings.llm_base_url)
+    if provider_name == "OpenAI":
+        provider_base_url = ""
+    settings = replace(
+        settings,
+        llm_provider=provider_name,
+        llm_model=provider_model,
+        llm_base_url=provider_base_url,
+    )
+    _, orchestrator = build_services(settings, get_llm_api_key(provider_name))
     with criteria_tab:
         render_criteria(criteria_rows)
         if criteria_error:
@@ -459,7 +577,7 @@ def main() -> None:
                                 step=0.1,
                                 key=f"experience_{widget_key}",
                             )
-                api_key_available = bool(get_llm_api_key())
+                api_key_available = bool(get_llm_api_key(settings.llm_provider))
                 if not api_key_available:
                     st.warning("LLM is not configured. Add OPENAI_API_KEY to Streamlit secrets or the server environment before evaluating.")
                 button_disabled = not active_criteria or not api_key_available or bool(st.session_state.get("evaluation_in_progress"))
@@ -471,6 +589,7 @@ def main() -> None:
                 )
             if submitted and not st.session_state.get("evaluation_in_progress"):
                 st.session_state.evaluation_in_progress = True
+                completed_run = False
                 try:
                     submissions = []
                     errors = []
@@ -505,12 +624,19 @@ def main() -> None:
                         run = orchestrator.run(submissions)
                     st.session_state.current_run_id = run.rfp_run_id
                     st.session_state.evaluation_error = None
-                    st.success(f"Evaluation complete · Run {run.rfp_run_id}")
+                    st.session_state.completed_run_notice = f"Evaluation complete · Run {run.rfp_run_id}"
+                    completed_run = True
                 except (ValueError, RuntimeError, EvaluationError, ScorecardValidationError) as error:
                     st.session_state.evaluation_error = str(error)
                     st.error(str(error))
                 finally:
                     st.session_state.evaluation_in_progress = False
+                if completed_run:
+                    st.rerun()
+
+    completed_run_notice = st.session_state.pop("completed_run_notice", None)
+    if completed_run_notice:
+        st.success(completed_run_notice)
 
     with leaderboard_tab:
         st.markdown("### Batch leaderboard")

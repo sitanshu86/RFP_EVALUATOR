@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from decimal import Decimal
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts.init_db import initialize_database
 from src.config import Settings
 from src.documents import DocumentTool
-from src.evaluator import AgentResponse, EvaluationAgent
+from src.evaluator import AgentResponse, EvaluationAgent, OpenAIJsonLLM
 from src.exporter import export_run_json
 from src.models import (
     CriterionEvaluation,
@@ -142,6 +144,65 @@ class BackendTests(unittest.TestCase):
 
         self.assertEqual(result.json_text, response)
         self.assertEqual(len(llm.prompts), 1)
+
+    def test_openai_compatible_adapter_accepts_custom_endpoint(self) -> None:
+        adapter = OpenAIJsonLLM(
+            model="custom-model",
+            api_key="test-session-key",
+            base_url="https://provider.example/v1",
+        )
+
+        self.assertEqual(adapter.model, "custom-model")
+        self.assertEqual(adapter.base_url, "https://provider.example/v1")
+        self.assertEqual(adapter.api_key, "test-session-key")
+        self.assertNotIn("api_key", Settings(database_path=self.database_path).safe_run_config())
+
+    def test_ui_renders_results_for_selected_persisted_run(self) -> None:
+        criteria = self.repository.load_active_criteria()
+        scorecard = {
+            "supplier_name": "Selected Run Supplier",
+            "criteria": [
+                {
+                    "criterion_id": item.criterion_id,
+                    "score": 8,
+                    "max_score": format(item.max_score, "f"),
+                    "justification": "Supported by proposal.",
+                    "evidence": "Page 1: Evidence present in proposal.",
+                }
+                for item in criteria
+            ],
+            "risks": [],
+            "overall_summary": "Selected run test.",
+        }
+        orchestrator = RunOrchestrator(
+            self.repository,
+            FixedDocumentTool(),
+            EvaluationAgent(FixedLLM([json.dumps(scorecard)])),
+            ValidationTool(),
+            Settings(database_path=self.database_path),
+        )
+        orchestrator.run(
+            [SupplierSubmission(
+                "Selected Run Supplier", "2026-10-01", Decimal("7"), b"valid-test-pdf", "demo.pdf"
+            )]
+        )
+
+        from streamlit.testing.v1 import AppTest
+
+        connection = sqlite3.connect(self.database_path)
+        try:
+            run_id = connection.execute(
+                "SELECT rfp_run_id FROM rfp_runs WHERE status = 'completed' ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()[0]
+        finally:
+            connection.close()
+        app = AppTest.from_file(str(Path(__file__).resolve().parents[1] / "app.py"), default_timeout=20)
+        app.session_state["current_run_id"] = run_id
+        with patch.dict(os.environ, {"RFP_DATABASE_PATH": str(self.database_path)}):
+            app.run()
+
+        self.assertFalse(app.exception)
+        self.assertGreaterEqual(len(app.dataframe), 3)
 
     def test_decimal_scoring_zero_benchmark_and_tie_breaks(self) -> None:
         criteria = (
