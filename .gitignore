@@ -1,0 +1,8 @@
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+data/*.sqlite3
+__pycache__/
+*.py[cod]
+.venv/
